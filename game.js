@@ -1,135 +1,256 @@
 
-// Simple "Dodge the Blocks" game
-const canvas = document.getElementById("game");
-const ctx = canvas.getContext("2d");
-const scoreEl = document.getElementById("score");
-const restartBtn = document.getElementById("restart");
+// ---- DOM refs
+const timeEl = document.getElementById("time");
+const nightEl = document.getElementById("night");
+const powerEl = document.getElementById("power");
+const bgImg = document.getElementById("bg");
+const enemyImg = document.getElementById("enemy");
+const staticImg = document.getElementById("static");
+const overlayText = document.getElementById("overlayText");
+const jumpscare = document.getElementById("jumpscare");
 
-const W = canvas.width;
-const H = canvas.height;
+const cam1Btn = document.getElementById("cam1Btn");
+const cam2Btn = document.getElementById("cam2Btn");
+const officeBtn = document.getElementById("officeBtn");
+const doorBtn = document.getElementById("doorBtn");
+const lightBtn = document.getElementById("lightBtn");
 
-// Player properties
-const player = {
-  x: W / 2 - 20,
-  y: H - 70,
-  w: 40,
-  h: 40,
-  color: "#00d5ff",
-  speed: 5,
+// ---- Assets (backgrounds)
+const SCENE = {
+  OFFICE: "assets/office.png",
+  CAM1: "assets/cam1.png",
+  CAM2: "assets/cam2.png",
 };
 
-// Input state
-const keys = new Set();
-window.addEventListener("keydown", (e) => keys.add(e.key.toLowerCase()));
-window.addEventListener("keyup", (e) => keys.delete(e.key.toLowerCase()));
-
-function rect(x, y, w, h, color) {
-  ctx.fillStyle = color;
-  ctx.fillRect(x, y, w, h);
-}
-
-function collides(a, b) {
-  return !(
-    a.x + a.w < b.x ||
-    a.x > b.x + b.w ||
-    a.y + a.h < b.y ||
-    a.y > b.y + b.h
-  );
-}
-
-// Enemies (falling blocks)
-const blocks = [];
-function spawnBlock() {
-  const w = 30 + Math.random() * 30;
-  const x = Math.random() * (W - w);
-  const y = -40;
-  const speed = 2.5 + Math.random() * 3.5;
-  blocks.push({ x, y, w, h: 20 + Math.random() * 20, speed, color: "#ff4d4d" });
-}
-
-// Game state
-let score = 0;
+// ---- Game state
+let night = 1;
+let minutes = 0;       // in-game minutes (0..360)
+let showScene = "OFFICE"; // OFFICE | CAM1 | CAM2
+let doorClosed = false;
+let lightOn = false;
+let power = 100;
 let alive = true;
-let spawnTimer = 0;
-let spawnInterval = 50; // frames
+let won = false;
 
-function reset() {
-  player.x = W / 2 - 20;
-  score = 0;
+// Enemy state
+// positions: "CAM1", "CAM2", "HALL" (approach), "ATTACK"
+let enemyPos = "CAM1";
+let enemyVisible = false; // if should draw enemy image
+let nextMoveAt = 0;       // ms timestamp when enemy can move again
+
+// Timing
+const REAL_MS_PER_MIN = 250;  // speed of clock: 4 real sec = 1 in-game min  (90s full night)
+const LOOP_DT = 100;          // game loop dt
+let lastTick = performance.now();
+
+// ---- Utility
+function setScene(scene) {
+  showScene = scene;
+  switch (scene) {
+    case "OFFICE": bgImg.src = SCENE.OFFICE; break;
+    case "CAM1": bgImg.src = SCENE.CAM1; break;
+    case "CAM2": bgImg.src = SCENE.CAM2; break;
+  }
+  // cam static when not office
+  staticImg.style.opacity = scene === "OFFICE" ? 0 : 0.25 + Math.random() * 0.2;
+  overlayText.textContent = scene === "OFFICE" ? "" : scene;
+  overlayText.style.opacity = scene === "OFFICE" ? 0 : 0.8;
+  // sound("cam"); // enable after adding audio files
+}
+
+function formatClock(mins) {
+  // 12:00 AM .. 6:00 AM (0..360 mins)
+  const hours = Math.floor(mins / 60); // 0..6
+  const label = hours === 0 ? "12" : String(hours);
+  return `${label}:00 ${hours < 6 ? "AM" : "AM"}`;
+}
+
+function setDoor(closed) {
+  doorClosed = !!closed;
+  doorBtn.textContent = `Door: ${doorClosed ? "CLOSED" : "OPEN"}`;
+  // sound("door");
+}
+
+function setLight(on) {
+  lightOn = !!on;
+  lightBtn.textContent = lightOn ? "Light: ON" : "Light";
+}
+
+// ---- Audio (optional)
+const sounds = {};
+function loadSound(name, file) {
+  const a = new Audio(file);
+  a.volume = 0.35;
+  sounds[name] = a;
+}
+function sound(name) { try { sounds[name].currentTime = 0; sounds[name].play(); } catch {} }
+
+// Preload (only works if files exist; safe to comment out lines you don't have yet)
+["power","door","cam","scream"].forEach(n => {
+  // loadSound(n, `assets/${n}.wav`);
+});
+
+// ---- Buttons
+cam1Btn.onclick = () => setScene("CAM1");
+cam2Btn.onclick = () => setScene("CAM2");
+officeBtn.onclick = () => setScene("OFFICE");
+doorBtn.onclick = () => setDoor(!doorClosed);
+lightBtn.onmousedown = () => setLight(true);
+lightBtn.onmouseup = () => setLight(false);
+lightBtn.onmouseleave = () => setLight(false);
+
+// ---- Enemy AI
+function enemyCanMove(now) { return now >= nextMoveAt; }
+function scheduleNextMove(now) {
+  // Base delay, faster later in the night
+  const nightProgress = minutes / 360; // 0..1
+  const base = 3500 - 2000 * nightProgress; // 3.5s -> 1.5s
+  nextMoveAt = now + (base + Math.random() * 800);
+}
+
+function enemyStep(now) {
+  if (!enemyCanMove(now)) return;
+  scheduleNextMove(now);
+
+  // Simple state machine
+  if (enemyPos === "CAM1") {
+    // 60% stay, 40% move to CAM2
+    enemyPos = Math.random() < 0.4 ? "CAM2" : "CAM1";
+  } else if (enemyPos === "CAM2") {
+    // 40% approach hall, 30% back to CAM1, 30% stay
+    const r = Math.random();
+    if (r < 0.4) enemyPos = "HALL";
+    else if (r < 0.7) enemyPos = "CAM1";
+    else enemyPos = "CAM2";
+  } else if (enemyPos === "HALL") {
+    // 50% attempt attack, else bounce back to cams
+    if (Math.random() < 0.5) enemyPos = "ATTACK";
+    else enemyPos = Math.random() < 0.5 ? "CAM1" : "CAM2";
+  } else if (enemyPos === "ATTACK") {
+    // resolve attack this tick
+    attemptAttack();
+  }
+}
+
+function drawEnemy() {
+  // enemy is visible if in current camera OR peeking in office/hall with light
+  enemyVisible = false;
+
+  if (showScene === "CAM1" && enemyPos === "CAM1") enemyVisible = true;
+  if (showScene === "CAM2" && enemyPos === "CAM2") enemyVisible = true;
+
+  // If in hall, only visible in office when light is on
+  if (showScene === "OFFICE" && enemyPos === "HALL" && lightOn) enemyVisible = true;
+
+  enemyImg.style.opacity = enemyVisible ? 0.9 : 0;
+}
+
+function attemptAttack() {
+  // If door is closed, block the attack and push enemy back
+  if (doorClosed) {
+    enemyPos = "CAM1";
+    // slight power penalty for “slam”
+    power = Math.max(0, power - 2);
+    // sound("door");
+    return;
+  }
+
+  // Door open -> jumpscare (lose)
+  alive = false;
+  jumpscare.style.display = "block";
+  overlayText.style.opacity = 0;
+  enemyImg.style.opacity = 0;
+  staticImg.style.opacity = 0;
+  // sound("scream");
+}
+
+// ---- Power & Time
+function drainPower(dtMs) {
+  // Base drain
+  let drain = 0.004; // ~0.4% per 10s idle (approx)
+  if (showScene !== "OFFICE") drain += 0.010; // camera
+  if (doorClosed) drain += 0.020;             // door
+  if (lightOn) drain += 0.012;                // light
+
+  power = Math.max(0, power - drain * (dtMs / 16.67)); // scale by 60fps units
+
+  // visual hints
+  powerEl.classList.toggle("low", power <= 25 && power > 10);
+  powerEl.classList.toggle("critical", power <= 10);
+}
+
+function tickClock(dtMs) {
+  // Advance in-game minutes by real milliseconds
+  minutes += dtMs / REAL_MS_PER_MIN;
+  if (minutes > 360) minutes = 360;
+}
+
+// ---- Main loop
+function update(now) {
+  const dt = now - lastTick;
+  lastTick = now;
+
+  if (!alive || won) return;
+
+  // Time & power
+  tickClock(dt);
+  drainPower(dt);
+
+  // Enemy logic
+  enemyStep(now);
+  drawEnemy();
+
+  // UI updates
+  const hour = Math.floor(minutes / 60); // 0..6
+  timeEl.textContent = `${hour === 0 ? 12 : hour}:00 AM`;
+  powerEl.textContent = `Power: ${power.toFixed(0)}%`;
+  nightEl.textContent = `Night ${night}`;
+
+  // Random camera static flicker
+  if (showScene !== "OFFICE") {
+    staticImg.style.opacity = 0.18 + Math.random() * 0.25;
+  }
+
+  // Power out -> blackout behavior (simple)
+  if (power <= 0) {
+    overlayText.textContent = "POWER OUT";
+    overlayText.style.opacity = 0.9;
+    staticImg.style.opacity = 0;
+    // brief delay then force attack
+    if (enemyPos !== "ATTACK") {
+      setTimeout(() => { enemyPos = "ATTACK"; attemptAttack(); }, 1200);
+    }
+  }
+
+  // Win at 6 AM
+  if (minutes >= 360 && alive) {
+    won = true;
+    overlayText.textContent = "6:00 AM - You Survived!";
+    overlayText.style.opacity = 1;
+  }
+
+  requestAnimationFrame(update);
+}
+
+function resetGame() {
+  minutes = 0;
+  showScene = "OFFICE";
+  setScene("OFFICE");
+  setDoor(false);
+  setLight(false);
+  power = 100;
   alive = true;
-  blocks.length = 0;
-  spawnTimer = 0;
-  spawnInterval = 50;
-  restartBtn.hidden = true;
+  won = false;
+  enemyPos = "CAM1";
+  scheduleNextMove(performance.now());
+  jumpscare.style.display = "none";
+  overlayText.style.opacity = 0;
+  enemyImg.style.opacity = 0;
+  requestAnimationFrame(ts => { lastTick = ts; update(ts); });
 }
 
-function update() {
-  if (!alive) return;
-
-  // Move player
-  if (keys.has("arrowleft") || keys.has("a")) player.x -= player.speed;
-  if (keys.has("arrowright") || keys.has("d")) player.x += player.speed;
-  player.x = Math.max(0, Math.min(W - player.w, player.x));
-
-  // Spawning blocks
-  spawnTimer++;
-  if (spawnTimer >= spawnInterval) {
-    spawnTimer = 0;
-    spawnBlock();
-    // Increase difficulty gradually
-    if (spawnInterval > 18) spawnInterval -= 0.5;
-  }
-
-  // Move blocks & check collisions
-  for (const b of blocks) {
-    b.y += b.speed;
-    if (collides(player, b)) {
-      alive = false;
-      restartBtn.hidden = false;
-    }
-  }
-
-  // Remove off-screen blocks and add score
-  for (let i = blocks.length - 1; i >= 0; i--) {
-    if (blocks[i].y > H) {
-      blocks.splice(i, 1);
-      score++;
-      scoreEl.textContent = score;
-    }
-  }
-}
-
-function draw() {
-  ctx.clearRect(0, 0, W, H);
-
-  // Background grid effect
-  ctx.fillStyle = "#0e1428";
-  ctx.fillRect(0, 0, W, H);
-
-  // Player
-  rect(player.x, player.y, player.w, player.h, player.color);
-
-  // Blocks
-  for (const b of blocks) rect(b.x, b.y, b.w, b.h, b.color);
-
-  if (!alive) {
-    ctx.fillStyle = "rgba(0,0,0,0.5)";
-    ctx.fillRect(0, 0, W, H);
-    ctx.fillStyle = "#ffd54a";
-    ctx.font = "24px system-ui, Arial";
-    ctx.textAlign = "center";
-    ctx.fillText("Game Over! Press Restart", W / 2, H / 2);
-  }
-}
-
-function loop() {
-  update();
-  draw();
-  requestAnimationFrame(loop);
-}
-
-restartBtn.addEventListener("click", reset);
+// Click anywhere after losing to restart
+jumpscare.addEventListener("click", resetGame);
 
 // Start
-reset();
-loop();
+resetGame();
