@@ -4,18 +4,40 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Dodge the Blocks</title>
+  <title>Night Watch (Fan Game)</title>
   style.css
 </head>
 <body>
-  <h1>Dodge the Blocks</h1>
-  <div class="hud">
-    <span>Score: <strong id="score">0</strong></span>
-    <button id="restart" hidden>Restart</button>
-  </div>
-  <canvas id="game" width="400" height="600"></canvas>
+  <div id="frame">
+    <div id="hud">
+      <span id="time">12:00 AM</span>
+      <span id="night">Night 1</span>
+      <span id="power">Power: 100%</span>
+    </div>
 
-  <p class="tip">Move with ◀ ▶ arrow keys (or A/D). Avoid red blocks!</p>
+    <!-- Main screen (office/camera view) -->
+    <div id="screen">
+      assets/office.png
+      assets/enemy.png
+      <img id="static" alt    <div id="jumpscare">assets/jumpscare.png</div>
+      <div id="overlayText"></div>
+    </div>
+
+    <!-- Controls -->
+    <div id="controls">
+      <div class="left">
+        <button id="cam1Btn">Cam 1</button>
+        <button id="cam2Btn">Cam 2</button>
+        <button id="officeBtn">Office</button>
+      </div>
+      <div class="right">
+        <button id="doorBtn">Door: OPEN</button>
+        <button id="lightBtn">Light</button>
+      </div>
+    </div>
+
+    <div id="footer">Tip: Use the cameras to track the intruder. Close the door only when needed to save power.</div>
+  </div>
 
   game.js</script>
 </body>
